@@ -104,4 +104,5 @@ app.post('/admin/grant',h(async(q,r)=>{
   r.json({ok:true,plan,days:d});
 }));
 
-init().then(()=>app.listen(process.env.PORT||3000,()=>console.log('API lista'))).catch(e=>{console.error(e);process.exit(1)});
+app.listen(process.env.PORT||3000,()=>console.log('Servidor escuchando'));
+init().then(()=>console.log('API lista')).catch(e=>console.error('Error al iniciar:',e.message));
