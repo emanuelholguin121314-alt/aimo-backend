@@ -75,4 +75,33 @@ app.post('/auth/register',h(async(q,r)=>{
   r.json({token:session(i.rows[0].id)});
 }));
 app.post('/auth/login',h(async(q,r)=>{
-  const e=String(q.body?.email||'').trim().toLowerCase(),pw=String(q.body?.password||''),key=q.
+  const e=String(q.body?.email||'').trim().toLowerCase(),pw=String(q.body?.password||''),key=q.ip+'|'+e;
+  if(limited(key))return r.status(429).json({error:'Demasiados intentos. Espera 15 minutos.'});
+  const u=(await pool.query('SELECT id,pass_hash FROM users WHERE email=$1',[e])).rows[0];
+  let ok=false;
+  if(u){const [s,k]=u.pass_hash.split(':');ok=timingSafeEqual(await scr(pw,Buffer.from(s,'hex'),64),Buffer.from(k,'hex'))}
+  if(!ok){fail(key);return r.status(401).json({error:'Correo o contraseña incorrectos'})}
+  r.json({token:session(u.id)});
+}));
+app.get('/me/entitlement',needAuth,h(async(q,r)=>r.json(await entitlement(q.uid))));
+app.get('/me/can/:feature',needAuth,h(async(q,r)=>r.json({feature:q.params.feature,allowed:await can(q.uid,q.params.feature)})));
+
+// SOLO PRUEBAS: asignación manual de plan. Se reemplaza por pagos verificados (webhooks) en la Etapa 4.
+app.get('/admin',(_,r)=>r.type('html').send(`<!DOCTYPE html><meta name=viewport content="width=device-width,initial-scale=1"><body style="font:16px system-ui;background:#07040f;color:#f3ecff;padding:16px"><h3>Asignar plan (pruebas)</h3>
+<input id=e placeholder=correo style=width:100%;padding:10px;margin:4px><select id=p style=width:100%;padding:10px;margin:4px><option>essential<option>pro<option>studio<option>none</select><input id=d value=30 type=number style=width:100%;padding:10px;margin:4px><input id=k type=password placeholder="ADMIN_KEY" style=width:100%;padding:10px;margin:4px>
+<button onclick="go()" style=padding:12px;margin:4px>Aplicar</button><pre id=o></pre>
+<script>async function go(){const r=await fetch('/admin/grant',{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Key':k.value},body:JSON.stringify({email:e.value,plan:p.value,days:+d.value})});o.textContent=await r.text()}</script>`));
+app.post('/admin/grant',h(async(q,r)=>{
+  const k=process.env.ADMIN_KEY;if(!k)return r.status(503).json({error:'ADMIN_KEY no configurada'});
+  if(!eq(String(q.headers['x-admin-key']||''),k))return r.status(401).json({error:'Clave incorrecta'});
+  const {email,plan,days}=q.body||{};
+  const u=(await pool.query('SELECT id FROM users WHERE email=$1',[String(email||'').trim().toLowerCase()])).rows[0];
+  if(!u)return r.status(404).json({error:'Usuario no encontrado'});
+  if(!(await pool.query('SELECT 1 FROM plans WHERE code=$1 AND active',[plan])).rows[0])return r.status(400).json({error:'Plan inválido'});
+  const d=Math.min(Math.max(parseInt(days)||30,1),3660);
+  await pool.query("UPDATE subscriptions SET status='replaced' WHERE user_id=$1 AND status='active'",[u.id]);
+  if(plan!=='none')await pool.query("INSERT INTO subscriptions(user_id,plan_code,status,current_period_end,source) VALUES($1,$2,'active',now()+make_interval(days=>$3),'manual')",[u.id,plan,d]);
+  r.json({ok:true,plan,days:d});
+}));
+
+init().then(()=>app.listen(process.env.PORT||3000,()=>console.log('API lista'))).catch(e=>{console.error(e);process.exit(1)});
